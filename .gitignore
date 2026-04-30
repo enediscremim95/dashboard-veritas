@@ -1,6 +1,23 @@
 .env
 __pycache__/
 *.pyc
+# pastas geradas pelos scripts
 tratorval/
 qualy-usa/
+kooldent/
+dr-amanda/
+dfort/
+dentuga/
+kensington/
+porto-smile/
+all-clinique/
+bivar/
+lar-e-cia/
+mediconvert/
+felt/
+gnauto/
+cioalges/
+dist/
 logs/
+# dados Windsor — gerados em runtime, não commitados
+windsor_*.json

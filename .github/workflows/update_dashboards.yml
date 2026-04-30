@@ -1,0 +1,45 @@
+name: Atualizar Dashboards
+
+on:
+  # Roda todo dia as 09:00 horario de Brasilia (12:00 UTC)
+  schedule:
+    - cron: '0 12 * * *'
+  # Permite rodar manualmente pelo GitHub
+  workflow_dispatch:
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Setup Node.js (para wrangler)
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Instalar dependencias Python
+        run: pip install -r requirements.txt
+
+      - name: Instalar wrangler
+        run: npm install -g wrangler
+
+      - name: Buscar dados Windsor
+        env:
+          WINDSOR_API_KEY: ${{ secrets.WINDSOR_API_KEY }}
+        run: python refresh_windsor_data.py
+
+      - name: Gerar e deployar todos os dashboards
+        env:
+          CF_TOKEN: ${{ secrets.CF_TOKEN }}
+          CF_ACCOUNT: ${{ secrets.CF_ACCOUNT }}
+        run: python generate_all.py

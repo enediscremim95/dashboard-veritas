@@ -1,9 +1,10 @@
-﻿"""
-Qualy USA Dashboard — geração + deploy automático.
-Roda: python generate_qualy_usa.py
+"""
+Mediconvert Dashboard — geração + deploy automático.
+Roda: python generate_mediconvert.py
 
-Ecom USA — conversão principal: purchase (pixel Meta)
-Moeda: USD ($)
+Agência de Performance · Portugal
+Conversão: lead
+Moeda: EUR (€)
 """
 import json, os, re, subprocess, shutil
 from collections import defaultdict
@@ -15,29 +16,28 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 # ══════════════════════════════════════════════════════════════════════
 #  CONFIG
 # ══════════════════════════════════════════════════════════════════════
-CLIENTE_NOME  = "Qualy USA"
-CF_SUBFOLDER  = "qualy-usa"
+CLIENTE_NOME  = "Mediconvert"
+CLIENTE_SUB   = "Agencia de Performance · Portugal"
+CF_SUBFOLDER  = "mediconvert"
 
-HAS_META      = True
-HAS_GOOGLE    = True
+HAS_GOOGLE    = False
+HAS_ROAS      = False
 
-META_ACT      = "act_828411085334344"
-SHEET_ID      = "1xC_D39qiXuFaUueTdPBbo-sqHLhRIKk05XLWN5o3Efg"
-CLIENTE_SLUG  = "Qualy"
+META_ACT      = "act_142114298843103"
+CLIENTE_SLUG  = "Mediconvert"
 
-CONV_ACTION   = "purchase"           # métrica de conversão Meta (ecom)
-CONV_LABEL    = "Compras"
-CONV_UNIT     = "pedidos realizados"
-CONV_CPL_LBL  = "Custo / Compra"
-CONV_CPL_UNIT = "por pedido"
+CONV_ACTION   = "lead"
+CONV_LABEL    = "Leads"
+CONV_UNIT     = "leads captados"
+CONV_CPL_LBL  = "Custo / Lead"
+CONV_CPL_UNIT = "por lead"
 
-CURRENCY_SYM  = "$"                  # símbolo monetário
+CURRENCY_SYM  = "€"
 
-# CPA thresholds (USD)
-META_CPA_BOM   = 100.0
-META_CPA_OK    = 200.0
-GOOGLE_CPA_BOM =  50.0
-GOOGLE_CPA_OK  = 120.0
+META_CPA_BOM   = 30.0
+META_CPA_OK    = 60.0
+GOOGLE_CPA_BOM = 999.0
+GOOGLE_CPA_OK  = 999.0
 # ══════════════════════════════════════════════════════════════════════
 
 CF_TOKEN   = os.getenv("CF_TOKEN")
@@ -68,14 +68,12 @@ def clean_camp(raw):
     return n or raw[:35]
 
 _desc_map = {
-    "RMKT":        "Remarketing — quem ja viu o produto",
-    "REMARKETING": "Remarketing — quem ja viu o produto",
-    "CONVERSAO":   "Conversao — objetivo compra",
-    "CONVERSÃO":   "Conversao — objetivo compra",
+    "RMKT":        "Remarketing — quem ja viu",
+    "REMARKETING": "Remarketing — quem ja viu",
+    "CONVERSAO":   "Conversao — objetivo lead",
+    "CONVERSÃO":   "Conversao — objetivo lead",
     "DISTRIBUICAO":"Alcance para novo publico",
     "DISTRIBUIÇÃO":"Alcance para novo publico",
-    "CATALOG":     "Catalogo de produtos dinamico",
-    "ADVANTAGE":   "Advantage+ Shopping",
 }
 
 # ══════════════════════════════════════════════════════════════════════
@@ -90,13 +88,13 @@ if not os.path.exists(windsor_file):
 
 def fix_encoding(s):
     if not isinstance(s, str): return s
-    try: return s.encode('windows-1252').decode('utf-8')
+    try: return s.encode("latin-1").decode("utf-8")
     except: return s
-def fix_dict(obj):
-    if isinstance(obj, str): return fix_encoding(obj)
-    elif isinstance(obj, dict): return {k: fix_dict(v) for k, v in obj.items()}
-    elif isinstance(obj, list): return [fix_dict(i) for i in obj]
-    return obj
+
+def fix_dict(d):
+    if isinstance(d, dict): return {k: fix_dict(v) for k, v in d.items()}
+    if isinstance(d, list): return [fix_dict(i) for i in d]
+    return fix_encoding(d)
 
 with open(windsor_file, "r", encoding="utf-8") as f:
     windsor = fix_dict(json.load(f))
@@ -133,7 +131,7 @@ for row in meta_rows:
     lk  = int(row.get("actions_link_click") or 0)
     c   = int(row.get(WINDSOR_CONV_FIELD) or 0)
     msg = int(row.get("actions_onsite_conversion_messaging_conversation_started_7d") or 0)
-    rv  = float(row.get("action_values_purchase") or 0)
+
     v25 = int(row.get("video_p25_watched_actions_video_view") or 0)
     v50 = int(row.get("video_p50_watched_actions_video_view") or 0)
     v75 = int(row.get("video_p75_watched_actions_video_view") or 0)
@@ -145,7 +143,6 @@ for row in meta_rows:
     daily_m[d]["lk"]  += lk
     daily_m[d]["c"]   += c
     daily_m[d]["msg"] += msg
-    daily_m[d]["rv"]  += rv
     daily_m[d]["v25"] += v25
     daily_m[d]["v50"] += v50
     daily_m[d]["v75"] += v75
@@ -155,7 +152,7 @@ for row in meta_rows:
         desc = next((v for k, v in _desc_map.items() if cid and k in cid.upper()), "Campanha ativa")
         CAMP_META_INFO[cid] = {"nome": clean_camp(cid), "desc": desc}
 
-    CAMP_DAILY_LIST.append({"d": d, "id": cid, "s": s, "r": r, "lk": lk, "c": c, "rv": rv})
+    CAMP_DAILY_LIST.append({"d": d, "id": cid, "s": s, "r": r, "lk": lk, "c": c, "rv": 0.0})
 
 META = [
     (d, v["s"], v["r"], v["i"], v["c"], v["lk"], v["rv"],
@@ -165,122 +162,52 @@ META = [
 meta_last = META[-1][0] if META else today_str
 print(f"  Meta: {len(META)} dias | ultimo: {meta_last} | {len(CAMP_META_INFO)} campanhas")
 
-# AD_DRILL — nível de anúncio via Windsor (ad_rows = últimos 30 dias)
-ad_rows   = windsor.get("ad_rows", [])
-_cutoff30 = (today - timedelta(days=30)).strftime("%Y-%m-%d")
-AD_DRILL  = {}
-
+ad_rows = windsor.get("ad_rows", [])
+AD_DRILL = {}
 for row in ad_rows:
-    d   = row.get("date", "")
-    if not d or d < _cutoff30: continue
-    cn  = row.get("campaign_name", "—")
-    an  = row.get("adset_name",   "—")
-    adn = row.get("ad_name",      "—")
+    cn  = row.get("campaign_name", "—") or "—"
+    an  = row.get("adset_name", "—") or "—"
+    adn = row.get("ad_name", "—") or "—"
     s   = float(row.get("spend") or 0)
-    c   = int(row.get("actions_purchase") or 0)
-    thu = row.get("thumbnail_url", "") or ""
-    sid = row.get("effective_object_story_id", "") or ""
-    post_link = ""
-    if sid and "_" in sid:
-        parts = sid.split("_", 1)
-        post_link = f"https://www.facebook.com/permalink.php?story_fbid={parts[1]}&id={parts[0]}"
-
+    c   = int(row.get(WINDSOR_CONV_FIELD) or 0)
+    thumb = row.get("thumbnail_url", "") or ""
+    story = row.get("effective_object_story_id", "") or ""
+    link = ""
+    if story:
+        parts = story.split("_")
+        if len(parts) == 2:
+            link = f"https://www.facebook.com/{parts[0]}/posts/{parts[1]}"
     if cn not in AD_DRILL: AD_DRILL[cn] = {}
-    if an not in AD_DRILL[cn]:
-        AD_DRILL[cn][an] = {"name": an, "spend": 0.0, "conv": 0, "ads": {}}
-    AD_DRILL[cn][an]["spend"] += s
-    AD_DRILL[cn][an]["conv"]  += c
-    if adn not in AD_DRILL[cn][an]["ads"]:
-        AD_DRILL[cn][an]["ads"][adn] = {"name": adn, "spend": 0.0, "conv": 0, "thumb": thu, "link": post_link}
-    AD_DRILL[cn][an]["ads"][adn]["spend"] += s
-    AD_DRILL[cn][an]["ads"][adn]["conv"]  += c
-    if thu and not AD_DRILL[cn][an]["ads"][adn]["thumb"]:
-        AD_DRILL[cn][an]["ads"][adn]["thumb"] = thu
-    if post_link and not AD_DRILL[cn][an]["ads"][adn]["link"]:
-        AD_DRILL[cn][an]["ads"][adn]["link"] = post_link
-
+    if an not in AD_DRILL[cn]: AD_DRILL[cn][an] = {"name": an, "spend": 0, "conv": 0, "ads": {}}
+    if adn not in AD_DRILL[cn][an]["ads"]: AD_DRILL[cn][an]["ads"][adn] = {"name": adn, "spend": 0, "conv": 0, "thumb": thumb, "link": link}
+    AD_DRILL[cn][an]["spend"] += s; AD_DRILL[cn][an]["conv"] += c
+    AD_DRILL[cn][an]["ads"][adn]["spend"] += s; AD_DRILL[cn][an]["ads"][adn]["conv"] += c
 for cn in AD_DRILL:
     for an in AD_DRILL[cn]:
-        AD_DRILL[cn][an]["ads"] = sorted(
-            AD_DRILL[cn][an]["ads"].values(), key=lambda x: x["spend"], reverse=True)
-        AD_DRILL[cn][an]["spend"] = round(AD_DRILL[cn][an]["spend"], 2)
-
-print(f"  AD_DRILL: {len(AD_DRILL)} campanhas com criativos (últimos 30d)")
+        AD_DRILL[cn][an]["ads"] = sorted(AD_DRILL[cn][an]["ads"].values(), key=lambda x: x["spend"], reverse=True)
+    AD_DRILL[cn] = list(AD_DRILL[cn].values())
 ad_drill_json = json.dumps(AD_DRILL, separators=(",", ":"))
 
 # ══════════════════════════════════════════════════════════════════════
-# 3. GOOGLE ADS — transformar rows Windsor -> GOOGLE, CAMPANHAS
+# 3. GOOGLE ADS — nao usado (HAS_GOOGLE = False)
 # ══════════════════════════════════════════════════════════════════════
 GOOGLE    = []
 CAMPANHAS = []
-CAMP_DAILY_GOOGLE = []   # lista diária por campanha → filtragem dinâmica no JS
-
-daily_g = defaultdict(lambda: {"s":0.0,"imp":0,"cl":0,"cv":0.0,"rv":0.0})
-camp_g  = defaultdict(lambda: {"s":0.0,"cl":0,"cv":0.0,"rv":0.0})
-
-for row in google_rows:
-    d  = row.get("date", "")
-    if not d: continue
-    cn = row.get("campaign_name", "—")
-    s  = float(row.get("cost") or row.get("spend") or 0)
-    im = int(row.get("impressions") or 0)
-    cl = int(row.get("clicks") or 0)
-    cv = float(row.get("conversions") or 0)
-    rv = float(row.get("conversion_value") or 0)
-    daily_g[d]["s"]   += s
-    daily_g[d]["imp"] += im
-    daily_g[d]["cl"]  += cl
-    daily_g[d]["cv"]  += cv
-    daily_g[d]["rv"]  += rv
-    camp_g[cn]["s"]   += s
-    camp_g[cn]["cl"]  += cl
-    camp_g[cn]["cv"]  += cv
-    camp_g[cn]["rv"]  += rv
-    CAMP_DAILY_GOOGLE.append({"d": d, "id": cn, "nome": clean_camp(cn),
-                              "s": round(s, 4), "cl": cl, "cv": cv, "rv": round(rv, 2)})
-
-GOOGLE = [
-    (d, v["s"], v["imp"], v["cl"], int(v["cv"]), v["rv"])
-    for d, v in sorted(daily_g.items()) if v["s"] > 0
-]
-
-for cn, v in sorted(camp_g.items(), key=lambda x: x[1]["s"], reverse=True):
-    if v["s"] == 0: continue
-    conv = int(v["cv"])
-    cpa  = v["s"] / conv if conv > 0 else 0
-    cor  = ("green" if (conv > 0 and cpa < GOOGLE_CPA_BOM)
-            else "yellow" if (conv > 0 and cpa < GOOGLE_CPA_OK)
-            else "red" if conv > 0 else "yellow")
-    CAMPANHAS.append({"nome": clean_camp(cn), "desc": "Campanha ativa",
-                      "gasto": round(v["s"], 2), "cliques": v["cl"],
-                      "contatos": conv, "cpa": round(cpa, 2), "cor": cor})
-
-google_last = GOOGLE[-1][0] if GOOGLE else ""
-print(f"  Google: {len(GOOGLE)} dias | ultimo: {google_last} | {len(CAMPANHAS)} campanhas")
-
+google_last = ""
 
 # ══════════════════════════════════════════════════════════════════════
 # 3. JSON + DATAS
 # ══════════════════════════════════════════════════════════════════════
 meta_first   = META[0][0] if META else today_str
-google_first = GOOGLE[0][0] if GOOGLE else ""
-min_date     = min(meta_first, google_first) if (META and GOOGLE) else (meta_first if META else google_first)
+google_first = ""
+min_date     = meta_first if META else today_str
 max_date     = yesterday_str
-camp_label   = f"{meta_first[8:10]}/{meta_first[5:7]} — {today_str[8:10]}/{today_str[5:7]}"
-gcampmonth_label = (f"{google_first[8:10]}/{google_first[5:7]} — {google_last[8:10]}/{google_last[5:7]}"
-                    if GOOGLE and google_last else "—")
 
 meta_js        = [{"d":d,"s":s,"r":r,"i":imp,"c":cv,"lk":lk,"rv":rv,"v25":v25,"v50":v50,"v75":v75,"v95":v95,"msg":msg}
                   for d,s,r,imp,cv,lk,rv,v25,v50,v75,v95,msg in META]
-google_js      = [{"d":d,"s":s,"imp":imp,"cl":cl,"cv":cv,"rv":rv} for d,s,imp,cl,cv,rv in GOOGLE]
 meta_json      = json.dumps(meta_js,        separators=(",", ":"))
-google_json    = json.dumps(google_js,      separators=(",", ":"))
-camp_json             = json.dumps(CAMPANHAS,         separators=(",", ":"))
-camp_meta_json        = json.dumps(CAMP_META_INFO,    separators=(",", ":"))
-camp_daily_json       = json.dumps(CAMP_DAILY_LIST,   separators=(",", ":"))
-camp_daily_google_json= json.dumps(CAMP_DAILY_GOOGLE, separators=(",", ":"))
-
-_google_first_fmt = f"{google_first[8:10]}/{google_first[5:7]}" if google_first else "—"
+camp_meta_json  = json.dumps(CAMP_META_INFO,  separators=(",", ":"))
+camp_daily_json = json.dumps(CAMP_DAILY_LIST, separators=(",", ":"))
 
 # ══════════════════════════════════════════════════════════════════════
 # 4. HTML
@@ -300,14 +227,11 @@ HTML = f"""<!DOCTYPE html>
   body{{background:#0a0a0a;color:#e5e7eb;font-family:system-ui,-apple-system,sans-serif}}
   .card{{background:#141414;border:1px solid #252525;border-radius:12px}}
   .card-meta{{border-left:4px solid #3b82f6!important}}
-  .card-google{{border-left:4px solid #00ff88!important}}
-  .card-resumo{{border-left:4px solid #a855f7!important}}
   .title-meta{{color:#93c5fd!important}}
-  .title-google{{color:#4ade80!important}}
+  .card-resumo{{border-left:4px solid #a855f7!important}}
   .title-resumo{{color:#c084fc!important}}
   .neon{{color:#00ff88}}
   .badge-blue{{background:rgba(59,130,246,.12);color:#60a5fa;border:1px solid rgba(59,130,246,.25);border-radius:6px}}
-  .badge-green{{background:rgba(0,255,136,.1);color:#00ff88;border:1px solid rgba(0,255,136,.25);border-radius:6px}}
   .btn-period{{padding:6px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;border:1px solid #2a2a2a;background:#161616;color:#9ca3af;transition:all .15s}}
   .btn-period:hover{{border-color:#444;color:#e5e7eb}}
   .btn-period.active{{background:rgba(0,255,136,.12);border-color:rgba(0,255,136,.4);color:#00ff88}}
@@ -349,7 +273,6 @@ HTML = f"""<!DOCTYPE html>
   @media(max-width:767px){{
     .mc-table td:nth-child(3),.mc-table th:nth-child(3),
     .mc-table td:nth-child(4),.mc-table th:nth-child(4){{display:none}}
-    .gc-table td:nth-child(3),.gc-table th:nth-child(3){{display:none}}
     .btn-period{{padding:5px 10px;font-size:11px}}
   }}
 </style>
@@ -361,13 +284,12 @@ HTML = f"""<!DOCTYPE html>
 <div class="flex flex-col sm:flex-row sm:items-start sm:justify-between mb-6 gap-3">
   <div>
     <h1 class="text-3xl font-bold text-white tracking-widest uppercase">{CLIENTE_NOME}</h1>
-    <p class="text-xs text-gray-600 mt-1">E-commerce · USA</p>
+    <p class="text-xs text-gray-600 mt-1">{CLIENTE_SUB}</p>
   </div>
   <div class="text-left sm:text-right">
     <p class="text-xs text-gray-600">Dados ate <span class="text-gray-400 font-medium">{yesterday.strftime('%d/%m/%Y')}</span></p>
     <div class="flex sm:justify-end gap-1 mt-2 flex-wrap">
       <span class="badge-blue text-xs px-2 py-0.5 inline-flex items-center gap-1"><img src="https://cdn.simpleicons.org/meta/1877F2" width="12" height="12" alt="Meta"/> Meta Ads</span>
-      <span class="badge-green text-xs px-2 py-0.5 inline-flex items-center gap-1">{GADS_ICON} Google Ads</span>
     </div>
   </div>
 </div>
@@ -389,26 +311,24 @@ HTML = f"""<!DOCTYPE html>
   </div>
 </div>
 
-
 <!-- Data Content -->
 <div id="data-content">
 
 <!-- RESUMO GERAL -->
 <div class="card card-resumo p-5 mb-4">
-  <p class="sec-title title-resumo">Resumo Geral — Meta + Google</p>
+  <p class="sec-title title-resumo">Resumo — Meta Ads</p>
   <div class="grid grid-cols-2 md:grid-cols-4 gap-4">
-    <div><p class="kpi-label">Investimento Total</p><p class="kpi-val neon" id="tot-spend">—</p><p class="kpi-sub">Meta + Google</p></div>
-    <div><p class="kpi-label">Compras</p><p class="kpi-val neon" id="tot-leads">—</p><p class="kpi-sub">pedidos (Meta + Google)</p></div>
-    <div><p class="kpi-label">CPA Geral</p><p class="kpi-val text-white" id="tot-roas">—</p><p class="kpi-sub">custo por pedido (Meta + Google)</p></div>
-    <div><p class="kpi-label">Impressoes</p><p class="kpi-val text-white" id="tot-imp">—</p><p class="kpi-sub">Meta + Google</p></div>
+    <div><p class="kpi-label">Investimento</p><p class="kpi-val neon" id="tot-spend">—</p><p class="kpi-sub">total no periodo</p></div>
+    <div><p class="kpi-label">{CONV_LABEL}</p><p class="kpi-val neon" id="tot-leads">—</p><p class="kpi-sub">{CONV_UNIT}</p></div>
+    <div><p class="kpi-label">CPA Medio</p><p class="kpi-val text-white" id="tot-cpa">—</p><p class="kpi-sub">{CONV_CPL_UNIT}</p></div>
+    <div><p class="kpi-label">Impressoes</p><p class="kpi-val text-white" id="tot-imp">—</p><p class="kpi-sub">exibicoes totais</p></div>
   </div>
 </div>
 
 <!-- Chart -->
-<div class="card card-resumo p-5 mb-6">
-  <h2 class="sec-title">Investimento diario + Compras</h2>
+<div class="card card-meta p-5 mb-6">
+  <h2 class="sec-title">Investimento diario + {CONV_LABEL}</h2>
   <canvas id="mainChart" height="90"></canvas>
-  <p class="text-xs text-gray-700 mt-2">* Google disponivel a partir de {_google_first_fmt} (linha verde empilhada).</p>
 </div>
 
 <!-- META ADS -->
@@ -421,24 +341,19 @@ HTML = f"""<!DOCTYPE html>
   <div class="grid grid-cols-2 md:grid-cols-6 gap-3 mb-4">
     <div><p class="kpi-label">Alcance</p><p class="kpi-val text-white" id="m-reach">—</p><p class="kpi-sub">pessoas unicas</p></div>
     <div><p class="kpi-label">Impressoes</p><p class="kpi-val text-white" id="m-imp">—</p><p class="kpi-sub">exibicoes totais</p></div>
-    <div><p class="kpi-label">Frequencia</p><p class="kpi-val text-white" id="m-freq">—</p><p class="kpi-sub">media por pessoa</p></div>
+    <div><p class="kpi-label">Frequencia</p><p class="kpi-val text-white" id="m-freq">—</p><p class="kpi-sub">views por pessoa</p></div>
     <div><p class="kpi-label">CPM</p><p class="kpi-val text-white" id="m-cpm">—</p><p class="kpi-sub">custo por 1.000</p></div>
     <div><p class="kpi-label">CTR</p><p class="kpi-val text-white" id="m-ctr">—</p><p class="kpi-sub">taxa de clique</p></div>
     <div><p class="kpi-label">Investimento</p><p class="kpi-val neon" id="m-spend">—</p><p class="kpi-sub">total no periodo</p></div>
   </div>
   <div class="border-t border-gray-800 my-3"></div>
-  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+  <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
     <div><p class="kpi-label">Cliques</p><p class="kpi-val text-white" id="m-clicks">—</p><p class="kpi-sub">em links</p></div>
     <div><p class="kpi-label">CPC</p><p class="kpi-val text-white" id="m-cpc">—</p><p class="kpi-sub">custo por clique</p></div>
-    <div><p class="kpi-label">Compras</p><p class="kpi-val neon" id="m-conv">—</p><p class="kpi-sub">pedidos realizados</p></div>
-    <div><p class="kpi-label">Custo / Compra</p><p class="kpi-val text-white" id="m-cpl">—</p><p class="kpi-sub">por pedido</p></div>
+    <div><p class="kpi-label">{CONV_LABEL}</p><p class="kpi-val neon" id="m-conv">—</p><p class="kpi-sub">{CONV_UNIT}</p></div>
+    <div><p class="kpi-label">{CONV_CPL_LBL}</p><p class="kpi-val text-white" id="m-cpl">—</p><p class="kpi-sub">{CONV_CPL_UNIT}</p></div>
+    <div><p class="kpi-label">Conversas (Wpp + DM)</p><p class="kpi-val text-white" id="m-msg">—</p><p class="kpi-sub">WhatsApp + Instagram Direct</p></div>
   </div>
-  <div class="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-    <div><p class="kpi-label">Faturamento</p><p class="kpi-val neon" id="m-rev">—</p><p class="kpi-sub">receita rastreada (pixel)</p></div>
-    <div><p class="kpi-label">ROAS</p><p class="kpi-val" style="color:#00ff88" id="m-roas">—</p><p class="kpi-sub">receita / investimento</p></div>
-    <div><p class="kpi-label">Taxa de Conv.</p><p class="kpi-val text-white" id="m-taxa">—</p><p class="kpi-sub">cliques → compra</p></div>
-  </div>
-  <div class="border-t border-gray-800 my-3"></div>
   <div class="border-t border-gray-800 my-3" id="video-divider"></div>
   <div id="video-block">
     <p class="kpi-label mb-3">Retencao de video</p>
@@ -453,7 +368,7 @@ HTML = f"""<!DOCTYPE html>
 </div>
 
 <!-- META CAMPANHAS -->
-<div class="card card-meta p-5 mb-4">
+<div class="card card-meta p-5 mb-6">
   <div class="sec-title title-meta flex items-center gap-2 mb-3">
     <img src="https://cdn.simpleicons.org/meta/1877F2" width="18" height="18" alt="Meta"/>
     Campanhas Meta
@@ -467,65 +382,12 @@ HTML = f"""<!DOCTYPE html>
         <th class="text-right pb-3 pr-4">Investido</th>
         <th class="text-right pb-3 pr-4">Alcance</th>
         <th class="text-right pb-3 pr-4">Cliques</th>
-        <th class="text-right pb-3 pr-4">Compras</th>
-        <th class="text-right pb-3 pr-4">Custo/Compra</th>
-        <th class="text-right pb-3 pr-4">Valor Conv.</th>
-        <th class="text-right pb-3">ROAS</th>
+        <th class="text-right pb-3 pr-4">{CONV_LABEL}</th>
+        <th class="text-right pb-3">{CONV_CPL_LBL}</th>
       </tr></thead>
       <tbody id="meta-camp-body"></tbody>
     </table>
   </div>
-</div>
-
-<!-- GOOGLE ADS -->
-<div class="card card-google p-5 mb-4">
-  <div class="sec-title title-google flex items-center gap-2 mb-3">
-    {GADS_ICON}Google Ads — Pesquisa
-    <span class="date-pill" id="google-date-label"></span>
-  </div>
-  <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
-    <div><p class="kpi-label">Impressoes</p><p class="kpi-val text-white" id="g-imp">—</p><p class="kpi-sub">vezes exibido</p></div>
-    <div><p class="kpi-label">CTR</p><p class="kpi-val text-white" id="g-ctr">—</p><p class="kpi-sub">taxa de clique</p></div>
-    <div><p class="kpi-label">Cliques</p><p class="kpi-val text-white" id="g-clicks">—</p><p class="kpi-sub">visitas ao site</p></div>
-    <div><p class="kpi-label">CPC</p><p class="kpi-val text-white" id="g-cpc">—</p><p class="kpi-sub">custo por clique</p></div>
-    <div><p class="kpi-label">Investimento</p><p class="kpi-val neon" id="g-spend">—</p><p class="kpi-sub">total no periodo</p></div>
-  </div>
-  <div class="border-t border-gray-800 my-3"></div>
-  <div class="grid grid-cols-2 md:grid-cols-5 gap-3 mb-4">
-    <div><p class="kpi-label">Conversoes</p><p class="kpi-val neon" id="g-conv">—</p><p class="kpi-sub">pedidos</p></div>
-    <div><p class="kpi-label">CPA</p><p class="kpi-val text-white" id="g-cpa">—</p><p class="kpi-sub">custo por pedido</p></div>
-    <div><p class="kpi-label">Taxa de Conv.</p><p class="kpi-val text-white" id="g-taxa">—</p><p class="kpi-sub">cliques → pedido</p></div>
-    <div class="p-3 rounded-lg" style="background:rgba(0,255,136,.06);border:1px solid rgba(0,255,136,.2)">
-      <p class="kpi-label" style="color:#4ade80">ROAS Google</p>
-      <p class="kpi-val" style="color:#00ff88" id="g-roas">—</p>
-      <p class="kpi-sub">receita / gasto</p>
-    </div>
-    <div><p class="kpi-label">Faturamento</p><p class="kpi-val text-white" id="g-fat">—</p><p class="kpi-sub">receita rastreada</p></div>
-  </div>
-  <p class="text-xs text-gray-600 mt-4 italic" id="google-note"></p>
-</div>
-
-<!-- GOOGLE CAMPANHAS -->
-<div class="card card-google p-5 mb-6">
-  <div class="sec-title title-google flex items-center gap-2 mb-3">
-    {GADS_ICON}Campanhas Google
-    <span class="date-pill" id="google-camp-date-label"></span>
-  </div>
-  <div class="overflow-x-auto">
-    <table class="gc-table w-full text-sm">
-      <thead><tr class="text-xs text-gray-600 border-b border-gray-800">
-        <th class="text-left pb-3 pr-4">Campanha</th>
-        <th class="text-right pb-3 pr-4">Investido</th>
-        <th class="text-right pb-3 pr-4">Cliques</th>
-        <th class="text-right pb-3 pr-4">Conversoes</th>
-        <th class="text-right pb-3 pr-4">Custo/conv.</th>
-        <th class="text-right pb-3 pr-4">Faturamento</th>
-        <th class="text-right pb-3">ROAS</th>
-      </tr></thead>
-      <tbody id="camp-body"></tbody>
-    </table>
-  </div>
-  <p class="text-xs text-gray-600 mt-3" id="camp-note"></p>
 </div>
 
 <div class="text-center text-xs text-gray-700 py-4">Atualizado em {today.strftime('%d/%m/%Y')}</div>
@@ -534,27 +396,19 @@ HTML = f"""<!DOCTYPE html>
 </div><!-- /max-w-5xl -->
 
 <script>
-const META_DATA   = {meta_json};
-const GOOGLE_DATA = {google_json};
-const CAMPANHAS   = {camp_json};
-const CAMP_META   = {camp_meta_json};
-const CAMP_DAILY  = {camp_daily_json};
-const AD_DRILL    = {ad_drill_json};
+const META_DATA  = {meta_json};
+const CAMP_META  = {camp_meta_json};
+const CAMP_DAILY = {camp_daily_json};
+const AD_DRILL   = {ad_drill_json};
 const META_CPA_BOM_JS = {META_CPA_BOM};
 const META_CPA_OK_JS  = {META_CPA_OK};
-const CAMP_DAILY_GOOGLE = {camp_daily_google_json};
-const GOOGLE_CPA_BOM_JS = {GOOGLE_CPA_BOM};
-const GOOGLE_CPA_OK_JS  = {GOOGLE_CPA_OK};
 
 let chart = null;
-const USD    = n => '$ ' + n.toLocaleString('en-US', {{minimumFractionDigits:2, maximumFractionDigits:2}});
-const USDINT = n => '$ ' + n.toLocaleString('en-US', {{minimumFractionDigits:2, maximumFractionDigits:2}});
+const CUR    = n => '€ ' + n.toFixed(2);
 const PCT    = n => n.toFixed(2) + '%';
 const FMT    = n => n >= 1000000 ? (n/1000000).toFixed(1)+'M' : n >= 1000 ? (n/1000).toFixed(1)+'K' : String(n);
 const fmtD = s => {{ const [y,m,d]=s.split('-'); return d+'/'+m; }};
 
-function filterM(from,to){{return META_DATA.filter(x=>x.d>=from&&x.d<=to);}}
-function filterG(from,to){{return GOOGLE_DATA.filter(x=>x.d>=from&&x.d<=to);}}
 function set(id,val){{const el=document.getElementById(id);if(el)el.textContent=val;}}
 
 function toggleDrill(campId) {{
@@ -569,83 +423,64 @@ function toggleDrill(campId) {{
   }}
 }}
 
-function toggleAset(asetId){{
-  const el=document.getElementById(asetId);
-  const arr=document.getElementById('arr-'+asetId);
-  if(!el)return;
-  const open=el.style.display==='none';
-  el.style.display=open?'block':'none';
-  if(arr)arr.textContent=open?'▼':'▶';
+function toggleAset(id) {{
+  const el = document.getElementById('aset-'+id);
+  const ar = document.getElementById('aset-arrow-'+id);
+  if(!el) return;
+  const hidden = el.classList.toggle('hidden');
+  if(ar) ar.textContent = hidden ? '▶' : '▼';
 }}
 
 function renderDrill(campId, container) {{
-  const data = AD_DRILL[campId];
-  if(!data || Object.keys(data).length === 0) {{
-    container.innerHTML = '<td colspan="8"><div class="drill-inner"><p class="text-gray-600 text-xs">Sem dados de criativo nos ultimos 30 dias.</p></div></td>';
+  const asets = AD_DRILL[campId];
+  if(!asets || asets.length === 0) {{
+    container.innerHTML = '<td colspan="7"><div class="drill-inner"><p class="text-gray-600 text-xs">Sem dados de criativo disponiveis.</p></div></td>';
     return;
   }}
-  const CUR_D = n => '$ ' + n.toFixed(2);
-  let html = '<td colspan="8"><div class="drill-inner">';
-  const asets = Object.values(data).sort((a,b)=>b.spend-a.spend);
-  asets.forEach((aset, ai) => {{
-    const asetId = 'aset-'+campId+'-'+ai;
+  let html = '<td colspan="7"><div class="drill-inner">';
+  asets.sort((a,b)=>b.spend-a.spend).forEach((aset,ai) => {{
     const asetCpa = aset.conv>0 ? aset.spend/aset.conv : 0;
-    const adCount = aset.ads ? aset.ads.length : 0;
-    html += `<div class="adset-hdr cursor-pointer select-none" onclick="toggleAset('${{asetId}}')" style="display:flex;align-items:center;justify-content:space-between;margin-bottom:0">
-      <div style="display:flex;align-items:center;gap:8px">
-        <span id="arr-${{asetId}}" style="font-size:10px;color:#6b7280">▶</span>
-        <span class="text-xs font-bold text-blue-300 uppercase tracking-wide">${{aset.name.length>60?aset.name.substring(0,57)+'...':aset.name}}</span>
-      </div>
-      <span class="text-xs">${{
-        `<span style="color:#fb923c;font-weight:600">${{CUR_D(aset.spend)}}</span>` +
-        ` · <span style="color:#4ade80;font-weight:600">${{aset.conv}} conv.</span>` +
-        (asetCpa>0 ? ` · <span style="color:#60a5fa;font-weight:600">${{CUR_D(asetCpa)}}/conv.</span>` : '') +
-        ` · <span style="color:#6b7280">${{adCount}} anuncio${{adCount!==1?'s':''}}</span>`
-      }}</span>
+    const asetId = campId.replace(/\W/g,'_')+'_'+ai;
+    html += `<div class="adset-hdr flex items-center gap-2 cursor-pointer" onclick="toggleAset('${{asetId}}')">
+      <span id="aset-arrow-${{asetId}}" class="text-gray-500 text-xs select-none">▼</span>
+      <span class="text-xs font-bold text-blue-300 uppercase tracking-wide">${{aset.name}}</span>
+      <span class="text-xs text-gray-500 ml-1">€ ${{aset.spend.toFixed(2)}} · ${{aset.conv}} conv.${{asetCpa>0?' · € '+asetCpa.toFixed(2)+'/conv.':''}}</span>
     </div>`;
-    html += `<div id="${{asetId}}" style="display:none" class="space-y-2 mb-3 mt-2 pl-4 border-l border-blue-900/40">`;
-    (aset.ads||[]).forEach(ad => {{
+    html += `<div id="aset-${{asetId}}" class="space-y-2 mb-4">`;
+    aset.ads.forEach(ad => {{
       const adCpa = ad.conv>0 ? ad.spend/ad.conv : 0;
       const cpaCls = ad.conv>0&&adCpa<META_CPA_BOM_JS?'text-green-400':ad.conv>0&&adCpa<META_CPA_OK_JS?'text-yellow-400':ad.conv>0?'text-red-400':'text-gray-600';
       const initials = ad.name.replace(/[^A-Za-z0-9]/g,' ').trim().split(/\s+/).slice(0,2).map(w=>w[0]||'').join('').toUpperCase()||'?';
-      const thumbWrap = ad.thumb
-        ? `<img src="${{ad.thumb}}" class="ad-thumb" alt="" onerror="this.parentNode.querySelector('.ad-thumb-ph').style.display='flex';this.style.display='none'"/><div class="ad-thumb-ph" style="display:none;font-size:11px;font-weight:700;color:#6b7280">${{initials}}</div>`
-        : `<div class="ad-thumb-ph" style="font-size:11px;font-weight:700;color:#6b7280">${{initials}}</div>`;
-      const eyeLink = ad.link || ad.thumb || '';
+      const thumbHtml = ad.thumb ? `<img src="${{ad.thumb}}" class="ad-thumb" alt="" onerror="this.parentNode.querySelector('.ad-thumb-ph').style.display='flex';this.style.display='none'"/><div class="ad-thumb-ph" style="display:none;font-size:11px;font-weight:700;color:#6b7280">${{initials}}</div>` : `<div class="ad-thumb-ph" style="font-size:11px;font-weight:700;color:#6b7280">${{initials}}</div>`;
       html += `<div class="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors">
-        ${{thumbWrap}}
+        ${{thumbHtml}}
         <div class="flex-1 min-w-0">
-          <div style="display:flex;align-items:center;gap:6px">
-            <p class="text-sm text-white font-medium truncate" title="${{ad.name}}" style="margin:0">${{ad.name.length>55?ad.name.substring(0,52)+'...':ad.name}}</p>
-          </div>
-          <p class="text-xs text-gray-500 mt-0.5">${{CUR_D(ad.spend)}} · <span class="${{cpaCls}} font-semibold">${{ad.conv}} conv.</span>${{adCpa>0?' · '+CUR_D(adCpa)+'/conv.':''}}</p>
+          <p class="text-sm text-white font-medium truncate" title="${{ad.name}}">${{ad.name.length>55?ad.name.substring(0,52)+'...':ad.name}}</p>
+          <p class="text-xs text-gray-500 mt-0.5">€ ${{ad.spend.toFixed(2)}} · <span class="${{cpaCls}} font-semibold">${{ad.conv}} conv.</span>${{adCpa>0?' · € '+adCpa.toFixed(2)+'/conv.':''}}</p>
         </div>
       </div>`;
     }});
     html += '</div>';
   }});
-  html += '<p class="drill-note">* Dados dos ultimos 30 dias (fixo)</p>';
+  html += '<p class="drill-note">* Dados agregados dos ultimos 90 dias</p>';
   html += '</div></td>';
   container.innerHTML = html;
 }}
 
 function update(from,to){{
-  const mR = filterM(from,to);
-  const gR = filterG(from, to);
+  const mR = META_DATA.filter(x=>x.d>=from&&x.d<=to);
 
-  // Meta totais
   const mSpend=mR.reduce((a,x)=>a+x.s,0);
   const mReach=mR.reduce((a,x)=>a+x.r,0);
   const mImp  =mR.reduce((a,x)=>a+x.i,0);
   const mConv =mR.reduce((a,x)=>a+x.c,0);
   const mClk  =mR.reduce((a,x)=>a+x.lk,0);
-  const mRev  =mR.reduce((a,x)=>a+(x.rv||0),0);
-  const mROAS =mSpend>0&&mRev>0?mRev/mSpend:0;
   const mCPM  =mImp>0?mSpend/mImp*1000:0;
   const mCTR  =mImp>0?mClk/mImp*100:0;
   const mCPC  =mClk>0?mSpend/mClk:0;
   const mCPL  =mConv>0?mSpend/mConv:0;
-  const mMsg = mR.reduce((a,x)=>a+(x.msg||0),0);
+  const mMsg  =mR.reduce((a,x)=>a+(x.msg||0),0);
+  const mFreq =mReach>0?mImp/mReach:0;
 
   const vRows=mR.filter(x=>x.v25>0);
   const v25=vRows.reduce((a,x)=>a+x.v25,0);
@@ -654,21 +489,17 @@ function update(from,to){{
   const v95=vRows.reduce((a,x)=>a+x.v95,0);
   const hasVideo=v25>0;
 
-  const mFreq = mReach>0 ? mImp/mReach : 0;
   set('m-reach', FMT(mReach));
   set('m-imp',   FMT(mImp));
-  set('m-freq',  mFreq>0 ? mFreq.toFixed(1)+'x' : '—');
-  set('m-cpm',   USD(mCPM));
+  set('m-freq',  mFreq>0?mFreq.toFixed(1)+'x':'—');
+  set('m-cpm',   CUR(mCPM));
   set('m-ctr',   PCT(mCTR));
-  set('m-spend', USD(mSpend));
-  const mTaxa = mClk>0 ? mConv/mClk*100 : 0;
+  set('m-spend', CUR(mSpend));
   set('m-clicks',mClk);
-  set('m-cpc',   mClk>0?USD(mCPC):'—');
+  set('m-cpc',   mClk>0?CUR(mCPC):'—');
   set('m-conv',  mConv);
-  set('m-cpl',   mConv>0?USD(mCPL):'—');
-  set('m-taxa',  mClk>0?PCT(mTaxa):'—');
-  set('m-roas',  mROAS>0?mROAS.toFixed(2)+'x':'—');
-  set('m-rev',   mRev>0?USD(mRev):'—');
+  set('m-cpl',   mConv>0?CUR(mCPL):'—');
+  set('m-msg',   mMsg > 0 ? FMT(mMsg) : '—');
   set('meta-date-label', fmtD(from)+' — '+fmtD(to));
 
   if(hasVideo){{
@@ -685,63 +516,22 @@ function update(from,to){{
     set('video-note','Sem dados de video no periodo selecionado.');
   }}
 
-  // Google totais
-  const gSpend =gR.reduce((a,x)=>a+x.s,0);
-  const gImp   =gR.reduce((a,x)=>a+x.imp,0);
-  const gClicks=gR.reduce((a,x)=>a+x.cl,0);
-  const gConv  =gR.reduce((a,x)=>a+x.cv,0);
-  const gRev   =gR.reduce((a,x)=>a+(x.rv||0),0);
-  const gCPA   =gConv>0?gSpend/gConv:0;
-  const gCPC   =gClicks>0?gSpend/gClicks:0;
-  const gCTR   =gImp>0?gClicks/gImp*100:0;
-  const gTaxa  =gClicks>0?gConv/gClicks*100:0;
-  const gROAS  =gSpend>0&&gRev>0?gRev/gSpend:0;
-  const hasG   =gR.length>0&&gSpend>0;
-
-  set('g-imp',    hasG?FMT(gImp):'—');
-  set('g-ctr',    hasG&&gImp>0?PCT(gCTR):'—');
-  set('g-clicks', hasG?gClicks:'—');
-  set('g-cpc',    hasG&&gClicks>0?USD(gCPC):'—');
-  set('g-spend',  hasG?USD(gSpend):'—');
-  set('g-conv',   hasG?gConv:'—');
-  set('g-cpa',    hasG&&gConv>0?USD(gCPA):'—');
-  set('g-taxa',   hasG&&gClicks>0?PCT(gTaxa):'—');
-  set('g-roas',   hasG&&gROAS>0?gROAS.toFixed(2)+'x':'—');
-  set('g-fat',    hasG&&gRev>0?USDINT(gRev):'—');
-  set('google-note', hasG ? '' : 'Sem dados Google no periodo selecionado.');
-
-  set('google-date-label', gR.length>0 ? fmtD(from)+' — '+fmtD(to) : fmtD(from)+' — '+fmtD(to)+' (sem dados)');
-
-  // Resumo Geral
-  const totSpend=mSpend+gSpend;
-  const totLeads=mConv+gConv;
-  const totImp  = mImp + gImp;
-  const totRev  = mRev + gRev;
-  const totROAS = totSpend>0&&totRev>0 ? totRev/totSpend : 0;
-  set('tot-spend', USD(totSpend));
-  set('tot-leads', totLeads>0?totLeads:'—');
-  const totCPA = totLeads>0 ? totSpend/totLeads : 0;
-  set('tot-roas',  totCPA>0?USD(totCPA):'—');
-  set('tot-imp',   FMT(totImp));
+  // Resumo
+  set('tot-spend', CUR(mSpend));
+  set('tot-leads', mConv > 0 ? mConv : '—');
+  set('tot-cpa',   mConv > 0 ? CUR(mSpend/mConv) : '—');
+  set('tot-imp',   FMT(mImp));
 
   // Grafico
-  const allDates=[...new Set([...mR.map(x=>x.d),...gR.map(x=>x.d)])].sort();
-  const mByD=Object.fromEntries(mR.map(x=>[x.d,x]));
-  const gByD=Object.fromEntries(gR.map(x=>[x.d,x]));
-  const labels  =allDates.map(fmtD);
-  const dsMeta  =allDates.map(d=>mByD[d]?mByD[d].s:0);
-  const dsGoogle=allDates.map(d=>gByD[d]?gByD[d].s:0);
-  const dsConv  =allDates.map(d=>mByD[d]?mByD[d].c:0);
-
+  const allDates=mR.map(x=>x.d).sort();
   if(chart)chart.destroy();
   Chart.defaults.color='#6b7280';
   chart=new Chart(document.getElementById('mainChart').getContext('2d'),{{
     data:{{
-      labels,
+      labels: allDates.map(fmtD),
       datasets:[
-        {{type:'bar',label:'Meta ($)',data:dsMeta,backgroundColor:'rgba(59,130,246,.2)',borderColor:'#60a5fa',borderWidth:1,borderRadius:3,stack:'sp',yAxisID:'y'}},
-        {{type:'bar',label:'Google ($)',data:dsGoogle,backgroundColor:'rgba(0,255,136,.18)',borderColor:'#00ff88',borderWidth:1,borderRadius:3,stack:'sp',yAxisID:'y'}},
-        {{type:'line',label:'Compras',data:dsConv,borderColor:'#f59e0b',backgroundColor:'rgba(245,158,11,.1)',borderWidth:2,pointRadius:allDates.length>30?2:4,tension:.3,fill:false,yAxisID:'y1'}}
+        {{type:'bar',label:'Meta (€)',data:allDates.map(d=>{{const r=mR.find(x=>x.d===d);return r?r.s:0;}}),backgroundColor:'rgba(59,130,246,.2)',borderColor:'#60a5fa',borderWidth:1,borderRadius:3,yAxisID:'y'}},
+        {{type:'line',label:'{CONV_LABEL}',data:allDates.map(d=>{{const r=mR.find(x=>x.d===d);return r?r.c:0;}}),borderColor:'#f59e0b',backgroundColor:'rgba(245,158,11,.1)',borderWidth:2,pointRadius:allDates.length>30?2:4,tension:.3,fill:false,yAxisID:'y1'}}
       ]
     }},
     options:{{
@@ -750,84 +540,33 @@ function update(from,to){{
       plugins:{{
         legend:{{labels:{{color:'#9ca3af',font:{{size:11}},padding:16}}}},
         tooltip:{{backgroundColor:'#1a1a1a',borderColor:'#333',borderWidth:1,titleColor:'#e5e7eb',bodyColor:'#9ca3af',
-          callbacks:{{label:c=>c.dataset.label==='Compras'?'  Compras: '+c.parsed.y:'  '+c.dataset.label+': $ '+c.parsed.y.toFixed(2)}}}}
+          callbacks:{{label:c=>c.dataset.label==='{CONV_LABEL}'?'  {CONV_LABEL}: '+c.parsed.y:'  '+c.dataset.label+': € '+c.parsed.y.toFixed(2)}}}}
       }},
       scales:{{
-        x:{{stacked:true,grid:{{color:'#1a1a1a'}},ticks:{{color:'#6b7280',font:{{size:10}},maxRotation:45}}}},
-        y:{{stacked:true,grid:{{color:'#1a1a1a'}},ticks:{{color:'#6b7280',font:{{size:10}},callback:v=>'$ '+v}}}},
-        y1:{{position:'right',grid:{{drawOnChartArea:false}},ticks:{{color:'#fbbf24',font:{{size:10}},callback:v=>v+' comp.'}}}}
+        x:{{grid:{{color:'#1a1a1a'}},ticks:{{color:'#6b7280',font:{{size:10}},maxRotation:45}}}},
+        y:{{grid:{{color:'#1a1a1a'}},ticks:{{color:'#6b7280',font:{{size:10}},callback:v=>'€ '+v}}}},
+        y1:{{position:'right',grid:{{drawOnChartArea:false}},ticks:{{color:'#fbbf24',font:{{size:10}},callback:v=>v+' leads'}}}}
       }}
     }}
   }});
 
-  // Campanhas Google — agregar dinamicamente pelo período selecionado
-  set('google-camp-date-label', fmtD(from)+' — '+fmtD(to));
-  const gByIdCamp={{}};
-  CAMP_DAILY_GOOGLE.filter(x=>x.d>=from&&x.d<=to).forEach(row=>{{
-    if(!gByIdCamp[row.id]) gByIdCamp[row.id]={{nome:row.nome,gasto:0,cliques:0,conv:0,rev:0}};
-    gByIdCamp[row.id].gasto+=row.s;
-    gByIdCamp[row.id].cliques+=row.cl;
-    gByIdCamp[row.id].conv+=row.cv;
-    gByIdCamp[row.id].rev+=(row.rv||0);
-  }});
-  const gcamps=Object.values(gByIdCamp)
-    .filter(c=>c.gasto>0)
-    .sort((a,b)=>b.gasto-a.gasto);
-  const body=document.getElementById('camp-body');
-  body.innerHTML='';
-  let noteText='',gtotGasto=0,gtotCliques=0,gtotConv=0,gtotRev=0;
-  gcamps.forEach(c=>{{
-    const conv=Math.round(c.conv);
-    const cpa=conv>0?c.gasto/conv:0;
-    const roas=c.gasto>0&&c.rev>0?c.rev/c.gasto:0;
-    const cc=conv>0&&cpa<GOOGLE_CPA_BOM_JS?'tag-green':conv>0&&cpa<GOOGLE_CPA_OK_JS?'tag-yellow':conv>0?'tag-red':'text-gray-600';
-    const roasStr=roas>0?`<span class="tag-green font-bold">${{roas.toFixed(2)}}x</span>`:`<span class="text-gray-600">—</span>`;
-    body.innerHTML+=`<tr class="border-b border-gray-800/50">
-      <td class="py-3 pr-4"><p class="text-white font-medium">${{c.nome}}</p><p class="text-xs text-gray-500">Campanha ativa</p></td>
-      <td class="py-3 pr-4 text-right text-gray-300">$ ${{c.gasto.toFixed(2)}}</td>
-      <td class="py-3 pr-4 text-right text-gray-300">${{c.cliques}}</td>
-      <td class="py-3 pr-4 text-right font-bold text-white">${{conv}}</td>
-      <td class="py-3 pr-4 text-right"><span class="${{cc}} font-semibold">${{cpa>0?'$ '+cpa.toFixed(2):'—'}}</span></td>
-      <td class="py-3 pr-4 text-right text-gray-300">${{c.rev>0?'$ '+c.rev.toFixed(2):'—'}}</td>
-      <td class="py-3 text-right">${{roasStr}}</td>
-    </tr>`;
-    gtotGasto+=c.gasto; gtotCliques+=c.cliques; gtotConv+=conv; gtotRev+=c.rev;
-    if(conv>0&&cpa>GOOGLE_CPA_OK_JS) noteText='Atencao: "'+c.nome+'" com custo elevado ($ '+cpa.toFixed(2)+').';
-  }});
-  if(gcamps.length>1){{
-    const totCpa=gtotConv>0?gtotGasto/gtotConv:0;
-    const totRoas=gtotGasto>0&&gtotRev>0?gtotRev/gtotGasto:0;
-    body.innerHTML+=`<tr class="border-t-2 border-gray-600 bg-white/[.02]">
-      <td class="py-3 pr-4"><p class="text-gray-300 font-bold text-xs uppercase tracking-wide">Total</p></td>
-      <td class="py-3 pr-4 text-right font-bold text-white">$ ${{gtotGasto.toFixed(2)}}</td>
-      <td class="py-3 pr-4 text-right font-bold text-white">${{gtotCliques}}</td>
-      <td class="py-3 pr-4 text-right font-bold text-white">${{gtotConv}}</td>
-      <td class="py-3 pr-4 text-right font-bold text-white">${{totCpa>0?'$ '+totCpa.toFixed(2):'—'}}</td>
-      <td class="py-3 pr-4 text-right font-bold text-white">${{gtotRev>0?'$ '+gtotRev.toFixed(2):'—'}}</td>
-      <td class="py-3 text-right font-bold" style="color:#00ff88">${{totRoas>0?totRoas.toFixed(2)+'x':'—'}}</td>
-    </tr>`;
-  }}
-  document.getElementById('camp-note').textContent=noteText;
-
-  // Campanhas Meta — agregar dinamicamente por período selecionado
+  // Campanhas Meta
   set('meta-camp-date-label', fmtD(from)+' — '+fmtD(to));
   const byId={{}};
   CAMP_DAILY.filter(x=>x.d>=from&&x.d<=to).forEach(row=>{{
-    if(!byId[row.id]) byId[row.id]={{gasto:0,reach:0,lk:0,conv:0,rev:0}};
+    if(!byId[row.id]) byId[row.id]={{gasto:0,reach:0,lk:0,conv:0}};
     byId[row.id].gasto+=row.s;
     byId[row.id].reach+=row.r;
     byId[row.id].lk+=row.lk;
     byId[row.id].conv+=row.c;
-    byId[row.id].rev+=(row.rv||0);
   }});
   const camps=Object.entries(byId)
     .filter(([id,c])=>c.gasto>0)
     .map(([id,c])=>{{
       const info=CAMP_META[id]||{{nome:id,desc:'—'}};
       const cpa=c.conv>0?c.gasto/c.conv:0;
-      const roas=c.gasto>0&&c.rev>0?c.rev/c.gasto:0;
       const cor=c.conv>0&&cpa<{META_CPA_BOM}?'green':c.conv>0&&cpa<{META_CPA_OK}?'yellow':c.conv>0?'red':'blue';
-      return {{id,...info,...c,cpa,roas,cor}};
+      return {{id,...info,...c,cpa,cor}};
     }})
     .sort((a,b)=>b.gasto-a.gasto);
 
@@ -835,39 +574,33 @@ function update(from,to){{
   mbody.innerHTML='';
   camps.forEach(c=>{{
     const cc=c.cor==='green'?'tag-green':c.cor==='blue'?'text-blue-400':c.cor==='yellow'?'tag-yellow':'tag-red';
-    const cpaStr =c.conv>0?`<span class="${{cc}} font-semibold">$ ${{c.cpa.toFixed(2)}}</span>`:`<span class="text-gray-600">—</span>`;
+    const cpaStr =c.conv>0?`<span class="${{cc}} font-semibold">€ ${{c.cpa.toFixed(2)}}</span>`:`<span class="text-gray-600">—</span>`;
     const convStr=c.conv>0?`<span class="font-bold text-white">${{c.conv}}</span>`:`<span class="text-gray-600">—</span>`;
-    const roasStr=c.roas>0?`<span class="font-bold" style="color:#00ff88">${{c.roas.toFixed(2)}}x</span>`:`<span class="text-gray-600">—</span>`;
     const hasDrill = AD_DRILL[c.id] && Object.keys(AD_DRILL[c.id]).length > 0;
     const arrowEl = hasDrill ? `<span id="arrow-${{c.id}}" class="text-gray-500 text-xs mr-1 select-none">▶</span>` : `<span class="text-gray-800 text-xs mr-1">·</span>`;
     const rowClick = hasDrill ? `onclick="toggleDrill('${{c.id}}')" class="border-b border-gray-800/50 camp-row-click"` : `class="border-b border-gray-800/50"`;
     mbody.innerHTML+=`<tr ${{rowClick}}>
       <td class="py-3 pl-1 pr-2 w-6">${{arrowEl}}</td>
       <td class="py-3 pr-4"><p class="text-white font-medium">${{c.nome}}</p><p class="text-xs text-gray-500">${{c.desc}}</p></td>
-      <td class="py-3 pr-4 text-right text-gray-300">$ ${{c.gasto.toFixed(2)}}</td>
-      <td class="py-3 pr-4 text-right text-gray-300">${{c.reach.toLocaleString('en-US')}}</td>
+      <td class="py-3 pr-4 text-right text-gray-300">€ ${{c.gasto.toFixed(2)}}</td>
+      <td class="py-3 pr-4 text-right text-gray-300">${{c.reach.toLocaleString('pt-PT')}}</td>
       <td class="py-3 pr-4 text-right text-gray-300">${{c.lk}}</td>
       <td class="py-3 pr-4 text-right">${{convStr}}</td>
-      <td class="py-3 pr-4 text-right">${{cpaStr}}</td>
-      <td class="py-3 pr-4 text-right text-gray-300">${{c.rev>0?'$ '+c.rev.toFixed(2):'—'}}</td>
-      <td class="py-3 text-right">${{roasStr}}</td>
+      <td class="py-3 text-right">${{cpaStr}}</td>
     </tr>
     <tr id="drill-${{c.id}}" class="drill-row hidden"></tr>`;
   }});
-  if(camps.length>1){{
-    const mt=camps.reduce((a,c)=>{{a.g+=c.gasto;a.r+=c.reach;a.lk+=c.lk;a.cv+=c.conv;a.rv+=c.rev;return a;}},{{g:0,r:0,lk:0,cv:0,rv:0}});
+  if(camps.length>=1){{
+    const mt=camps.reduce((a,c)=>{{a.g+=c.gasto;a.r+=c.reach;a.lk+=c.lk;a.cv+=c.conv;return a;}},{{g:0,r:0,lk:0,cv:0}});
     const mcpa=mt.cv>0?mt.g/mt.cv:0;
-    const mroas=mt.g>0&&mt.rv>0?mt.rv/mt.g:0;
     mbody.innerHTML+=`<tr class="border-t-2 border-gray-600 bg-white/[.02]">
-      <td class="py-3 pl-1 pr-2 w-6"></td>
-      <td class="py-3 pr-4"><p class="text-gray-300 font-bold text-xs uppercase tracking-wide">Total</p></td>
-      <td class="py-3 pr-4 text-right font-bold text-white">$ ${{mt.g.toFixed(2)}}</td>
-      <td class="py-3 pr-4 text-right font-bold text-white">${{mt.r.toLocaleString('en-US')}}</td>
-      <td class="py-3 pr-4 text-right font-bold text-white">${{mt.lk}}</td>
-      <td class="py-3 pr-4 text-right font-bold text-white">${{mt.cv}}</td>
-      <td class="py-3 pr-4 text-right font-bold text-white">${{mcpa>0?'$ '+mcpa.toFixed(2):'—'}}</td>
-      <td class="py-3 pr-4 text-right font-bold text-white">${{mt.rv>0?'$ '+mt.rv.toFixed(2):'—'}}</td>
-      <td class="py-3 text-right font-bold" style="color:#00ff88">${{mroas>0?mroas.toFixed(2)+'x':'—'}}</td>
+      <td></td>
+      <td class="py-2 pl-1 text-xs text-gray-400 font-semibold uppercase tracking-wide">Total</td>
+      <td class="py-2 pr-4 text-right text-gray-200 font-semibold">€ ${{mt.g.toFixed(2)}}</td>
+      <td class="py-2 pr-4 text-right text-gray-200 font-semibold">${{mt.r.toLocaleString('pt-PT')}}</td>
+      <td class="py-2 pr-4 text-right text-gray-200 font-semibold">${{mt.lk}}</td>
+      <td class="py-2 pr-4 text-right text-white font-bold">${{mt.cv>0?mt.cv:'—'}}</td>
+      <td class="py-2 text-right text-gray-200 font-semibold">${{mcpa>0?'€ '+mcpa.toFixed(2):'—'}}</td>
     </tr>`;
   }}
 }}
@@ -878,7 +611,6 @@ function dateToIso(dt){{return dt.getFullYear()+'-'+String(dt.getMonth()+1).padS
 
 const MAX_DATE      = '{max_date}';
 const MIN_DATE      = '{min_date}';
-const GOOGLE_LAST   = '{google_last}';
 const TODAY_STR     = '{today_str}';
 const YESTERDAY_STR = '{yesterday_str}';
 
