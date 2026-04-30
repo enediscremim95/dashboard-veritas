@@ -42,4 +42,5 @@ jobs:
         env:
           CF_TOKEN: ${{ secrets.CF_TOKEN }}
           CF_ACCOUNT: ${{ secrets.CF_ACCOUNT }}
+          CF_PROJECT: ${{ secrets.CF_PROJECT }}
         run: python generate_all.py

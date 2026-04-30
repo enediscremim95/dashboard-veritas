@@ -14,7 +14,7 @@ load_dotenv(os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"))
 #  CONFIG
 # ══════════════════════════════════════════════════════════════════════
 CLIENTE_NOME  = "Dfort Clinic"
-CF_SUBFOLDER  = "dforte"
+CF_SUBFOLDER  = "dfort"
 META_ACT      = "act_734730603002091"
 CLIENTE_SLUG  = "Dfort"
 CONV_ACTION   = "lead"
