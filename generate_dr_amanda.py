@@ -517,9 +517,6 @@ function renderDrill(campId, container) {{
       const thumbWrap = ad.thumb
         ? `<img src="${{ad.thumb}}" class="ad-thumb" alt="" onerror="this.parentNode.querySelector('.ad-thumb-ph').style.display='flex';this.style.display='none'"/><div class="ad-thumb-ph" style="display:none;font-size:11px;font-weight:700;color:#6b7280">${{initials}}</div>`
         : `<div class="ad-thumb-ph" style="font-size:11px;font-weight:700;color:#6b7280">${{initials}}</div>`;
-      const eyeLink = ad.link || ad.thumb || '';
-        ? `<a href="${{eyeLink}}" target="_blank" rel="noopener" title="Ver post no Meta" style="color:#6b7280;text-decoration:none;font-size:14px;line-height:1;flex-shrink:0" onmouseover="this.style.color='#a78bfa'" onmouseout="this.style.color='#6b7280'">👁</a>`
-        : '';
       html += `<div class="flex items-center gap-3 p-2 rounded-lg hover:bg-white/5 transition-colors">
         ${{thumbWrap}}
         <div class="flex-1 min-w-0">
